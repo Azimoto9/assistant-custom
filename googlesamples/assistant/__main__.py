@@ -28,6 +28,105 @@ from googlesamples.assistant import (
     common_settings
 )
 
+import ctypes
+from ctypes import wintypes
+import time
+
+user32 = ctypes.WinDLL('user32', use_last_error=True)
+
+INPUT_MOUSE    = 0
+INPUT_KEYBOARD = 1
+INPUT_HARDWARE = 2
+
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP       = 0x0002
+KEYEVENTF_UNICODE     = 0x0004
+KEYEVENTF_SCANCODE    = 0x0008
+
+MAPVK_VK_TO_VSC = 0
+
+# msdn.microsoft.com/en-us/library/dd375731
+VK_TAB  = 0x09
+VK_MENU = 0x12
+
+# C struct definitions
+
+wintypes.ULONG_PTR = wintypes.WPARAM
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = (("dx",          wintypes.LONG),
+                ("dy",          wintypes.LONG),
+                ("mouseData",   wintypes.DWORD),
+                ("dwFlags",     wintypes.DWORD),
+                ("time",        wintypes.DWORD),
+                ("dwExtraInfo", wintypes.ULONG_PTR))
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = (("wVk",         wintypes.WORD),
+                ("wScan",       wintypes.WORD),
+                ("dwFlags",     wintypes.DWORD),
+                ("time",        wintypes.DWORD),
+                ("dwExtraInfo", wintypes.ULONG_PTR))
+
+    def __init__(self, *args, **kwds):
+        super(KEYBDINPUT, self).__init__(*args, **kwds)
+        # some programs use the scan code even if KEYEVENTF_SCANCODE
+        # isn't set in dwFflags, so attempt to map the correct code.
+        if not self.dwFlags & KEYEVENTF_UNICODE:
+            self.wScan = user32.MapVirtualKeyExW(self.wVk,
+                                                 MAPVK_VK_TO_VSC, 0)
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = (("uMsg",    wintypes.DWORD),
+                ("wParamL", wintypes.WORD),
+                ("wParamH", wintypes.WORD))
+
+class INPUT(ctypes.Structure):
+    class _INPUT(ctypes.Union):
+        _fields_ = (("ki", KEYBDINPUT),
+                    ("mi", MOUSEINPUT),
+                    ("hi", HARDWAREINPUT))
+    _anonymous_ = ("_input",)
+    _fields_ = (("type",   wintypes.DWORD),
+                ("_input", _INPUT))
+
+LPINPUT = ctypes.POINTER(INPUT)
+
+def _check_count(result, func, args):
+    if result == 0:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return args
+
+user32.SendInput.errcheck = _check_count
+user32.SendInput.argtypes = (wintypes.UINT, # nInputs
+                             LPINPUT,       # pInputs
+                             ctypes.c_int)  # cbSize
+# Functions
+
+def PressKey(hexKeyCode):
+    x = INPUT(type=INPUT_KEYBOARD,
+              ki=KEYBDINPUT(wVk=hexKeyCode))
+    user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
+
+def ReleaseKey(hexKeyCode):
+    x = INPUT(type=INPUT_KEYBOARD,
+              ki=KEYBDINPUT(wVk=hexKeyCode,
+                            dwFlags=KEYEVENTF_KEYUP))
+    user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
+
+def Vattack():
+    PressKey(VK_MENU)   # Alt
+    PressKey(0x10)    # shift
+    PressKey(0x11)  # L-ctrl
+    PressKey(0x4C) # L key
+    time.sleep(.5)
+    ReleaseKey(VK_MENU)   # Alt
+    ReleaseKey(0x10)    # shift
+    ReleaseKey(0x11)  # L-ctrl
+    ReleaseKey(0x4C) # L key
+
+# end custom code
+
 ASSISTANT_API_ENDPOINT = 'embeddedassistant.googleapis.com'
 END_OF_UTTERANCE = embedded_assistant_pb2.ConverseResponse.END_OF_UTTERANCE
 DIALOG_FOLLOW_ON = embedded_assistant_pb2.ConverseResult.DIALOG_FOLLOW_ON
@@ -169,7 +268,7 @@ def main(api_endpoint, credentials, verbose,
     )
 
     # Interactive by default.
-    wait_for_user_trigger = True
+    wait_for_user_trigger = False
     # If file arguments are supplied, don't wait for user trigger.
     if input_audio_file or output_audio_file:
         wait_for_user_trigger = False
@@ -259,8 +358,10 @@ def main(api_endpoint, credentials, verbose,
                 wait_for_user_trigger = False
                 logging.info('Expecting follow-on query from user.')
             elif resp.result.microphone_mode == CLOSE_MICROPHONE:
-                wait_for_user_trigger = True
+                wait_for_user_trigger = False
         logging.info('Finished playing assistant response.')
+        Vattack()
+        logging.info('Executed keyboard command')
         conversation_stream.stop_playback()
         # If file arguments are supplied, end the conversation.
         if input_audio_file or output_audio_file:
